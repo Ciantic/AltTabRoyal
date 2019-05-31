@@ -21,47 +21,16 @@
     <ClInclude Include="targetver.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Resource.h">
+    <ClInclude Include="AltTabRoyalTests.h">
       <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="AltTabRoyal.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="AltTabRoyalController.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="globals.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="AltTabWindowInfo.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="PeekPreview.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="AltTabRoyalWindow.h">
-      <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="AltTabRoyal.cpp">
+    <ClCompile Include="AltTabRoyalTests.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <ResourceCompile Include="AltTabRoyal.rc">
-      <Filter>Resource Files</Filter>
-    </ResourceCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <Image Include="AltTabRoyal.ico">
-      <Filter>Resource Files</Filter>
-    </Image>
-    <Image Include="small.ico">
-      <Filter>Resource Files</Filter>
-    </Image>
   </ItemGroup>
 </Project>

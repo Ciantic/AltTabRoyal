@@ -3,15 +3,28 @@
 #include "globals.h"
 #include "AltTabWindowInfo.h"
 using namespace std;
-using namespace Gdiplus;
-#pragma comment (lib,"Gdiplus.lib")
-#pragma comment (lib,"shcore.lib")
+using namespace D2D1;
 
-class AltTabRoyalWindow {
+#pragma comment (lib,"shcore.lib")
+#pragma comment (lib, "d2d1")
+#pragma comment (lib, "dwrite")
+#pragma comment (lib, "dwmapi")
+
+// Follows the guide here: https://docs.microsoft.com/en-us/windows/desktop/direct2d/direct2d-quickstart
+
+
+class AltTabRoyalWindowD2D {
 public:
 	static constexpr const auto CLASSNAME = L"ALT_TAB_ROYAL_WINDOW_CLASS";
-	AltTabRoyalWindow(vector<shared_ptr<AltTabWindowInfo>> windowInfos, int midX, int midY) {
+	AltTabRoyalWindowD2D(vector<shared_ptr<AltTabWindowInfo>> windowInfos, int midX, int midY)
+	{
 		this->windowInfos = windowInfos;
+
+		// Initialize device-indpendent resources, such
+		// as the Direct2D factory.
+		if (!SUCCEEDED(CreateDeviceIndependentResources())) {
+			throw runtime_error("Unable to create device independent resources");
+		}
 
 		// Determine dpiX and dpiY scaler
 		auto mon = MonitorFromPoint({ midX, midY }, MONITOR_DEFAULTTONEAREST);
@@ -22,22 +35,12 @@ public:
 		dpiY = dpiXv / 96.0;
 
 		// Scale the draw parameters
-		midX *= dpiX;
-		midY *= dpiY;
-		windowPadding *= dpiX;
-		gridWidth *= dpiX;
-		gridHeight *= dpiX;
-		contentPadding *= dpiX;
-		selectRectPadding *= dpiX;
-		iconSize *= dpiX;
-		iconPaddingBottom *= dpiY;
-		iconPaddingRight *= dpiX;
 
-		this->gridRows = (int) ceil((double) windowInfos.size() / (double) this->gridCols);
+		this->gridRows = (int)ceil((double)windowInfos.size() / (double)this->gridCols);
 		int windowWidth = (this->windowPadding * 2 + this->gridWidth * this->gridCols);
 		int windowHeight = (this->windowPadding * 2 + this->gridHeight * this->gridRows);
-		int windowX = (midX - (windowWidth / 2)); // DPI
-		int windowY = (midY - (windowHeight / 2)); // DPI
+		int windowX = (midX - (windowWidth / 2)); 
+		int windowY = (midY - (windowHeight / 2));
 
 		// Register window class
 		WNDCLASSEXW wcex;
@@ -47,54 +50,69 @@ public:
 		wcex.cbClsExtra = 0;
 		wcex.cbWndExtra = 0;
 		wcex.hInstance = hInst;
-		wcex.hIcon = NULL; 
+		wcex.hIcon = NULL;
 		wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
 		wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-		wcex.lpszMenuName = NULL; 
+		wcex.lpszMenuName = NULL;
 		wcex.lpszClassName = CLASSNAME;
-		wcex.hIconSm = NULL; 
+		wcex.hIconSm = NULL;
 		ATOM windowAtom = RegisterClassExW(&wcex);
 
 		// Create window
-		this->hwnd = CreateWindowExW(
-			WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+		hwnd = CreateWindowExW(
+			WS_EX_COMPOSITED | WS_EX_TOPMOST,
 			CLASSNAME,
 			L"Gui",
-			0, // Style
-			windowX, // x
-			windowY, // y
-			windowWidth, // w
-			windowHeight, // h
+			WS_POPUP, // Style
+			windowX * dpiX, // x
+			windowY * dpiY, // y
+			windowWidth * dpiX, // w
+			windowHeight * dpiY, // h
 			nullptr, // parent
 			nullptr, // menu
 			hInst,
-			nullptr);
+			this);
 
-		if (!this->hwnd)
+		if (!hwnd)
 		{
 			throw runtime_error("Unable to create window");
 		}
-		SetWindowLongPtr(this->hwnd, GWLP_USERDATA, (LONG_PTR)this);
-		PostMessageW(this->hwnd, WM_USER+1, NULL, NULL);
 
-		ShowWindow(this->hwnd, SW_SHOW);
-		UpdateWindow(this->hwnd);
+		// Creates DWM surface 
+		MARGINS m = { -1 };
+		if (!SUCCEEDED(DwmExtendFrameIntoClientArea(hwnd, &m))) {
+			throw runtime_error("Unable to extend");
+		}
+
+		ShowWindow(hwnd, SW_SHOW);
+		UpdateWindow(hwnd);
+	}
+
+	~AltTabRoyalWindowD2D() {
+		DestroyWindow(hwnd);
+		DiscardDeviceResources();
 	}
 
 	HWND GetHandle() {
-		return this->hwnd;
+		return hwnd;
 	}
 
 	void Select(int n) {
-		this->selected = n % this->windowInfos.size();
-		this->PaintLayeredWindow();
+		selected = n % this->windowInfos.size();
+		Redraw();
 	}
 
-	~AltTabRoyalWindow() {
-		DestroyWindow(this->hwnd);
-	}
 private:
-	HWND hwnd;
+	HWND hwnd = 0;
+	CComPtr<IWICImagingFactory> dwicFactory = nullptr;
+	CComPtr<IDWriteFactory> dwriteFactory = nullptr;
+	CComPtr<ID2D1Factory> d2dFactory = nullptr;
+	CComPtr<ID2D1HwndRenderTarget> renderTarget = nullptr;
+	CComPtr<ID2D1SolidColorBrush> brushBg = nullptr;
+	CComPtr<ID2D1SolidColorBrush> brushSelected = nullptr;
+	CComPtr<ID2D1SolidColorBrush> brushNotSelected = nullptr;
+	CComPtr<ID2D1SolidColorBrush> brushText = nullptr;
+
 	vector<shared_ptr<AltTabWindowInfo>> windowInfos;
 	int selected = 0;
 	int gridCols = 5;
@@ -109,77 +127,103 @@ private:
 	int iconSize = 50;
 	int iconPaddingRight = 5;
 	int iconPaddingBottom = 5;
-	
+	float fontSize = 12.0F;
+	const wchar_t* fontFamily = L"Segoe UI";
+
 	double dpiX = 1.0;
 	double dpiY = 1.0;
 
 	// Peek previews
 	// vector<shared_ptr<PeekPreview>> peekPreviews;
 
-	LRESULT CALLBACK WndProc(UINT message, WPARAM wParam, LPARAM lParam) {
 
-		switch (message)
+	HRESULT CreateDeviceIndependentResources() {
+		CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, __uuidof(IWICImagingFactory), reinterpret_cast<LPVOID*>(&dwicFactory));
+		DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(&dwriteFactory));
+		return D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &d2dFactory);
+	}
+
+	HRESULT CreateDeviceResources() {
+		if (renderTarget)
 		{
-			case WM_USER + 1:
-			{
-				this->PaintLayeredWindow();
-				break;
-			}
-			case WM_ERASEBKGND:
-				break;
-			case WM_PAINT:
-			{
-				/*
-				https://microsoft.public.win32.programmer.ui.narkive.com/ngoz2rJn/updatelayeredwindow-and-wm-paint-question
-				"In the window proc for a layered window, you should always handle WM_PAINT, call BeginPaint and EndPaint. You don't have to do anything in the middle. If you don't do this, windows will assume that the window is still invalid and pump another WM_PAINT. It does this over and over causing 100% CPU utilization..."
-				*/
-				PAINTSTRUCT ps;
-				BeginPaint(hwnd, &ps);
-				EndPaint(hwnd, &ps);
-				break;
-			}
-			case WM_DESTROY:
-				//PostQuitMessage(0);
-				break;
-			default:
-				return DefWindowProc(this->hwnd, message, wParam, lParam);
+			return S_OK;
 		}
-		return 0;
+
+		RECT rc;
+		GetClientRect(hwnd, &rc);
+
+		D2D1_SIZE_U size = SizeU(
+			rc.right - rc.left,
+			rc.bottom - rc.top
+		);
+
+		// Create a Direct2D render target.
+		if (!SUCCEEDED(d2dFactory->CreateHwndRenderTarget(
+			RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT, 
+				PixelFormat(DXGI_FORMAT_UNKNOWN, D2D1_ALPHA_MODE_PREMULTIPLIED)),
+			HwndRenderTargetProperties(hwnd, size),
+			&renderTarget
+		))) {
+			return 1;
+		}
+
+		renderTarget->CreateSolidColorBrush(
+			ColorF(0,0,0,0.85F),
+			&brushBg
+		);
+		renderTarget->CreateSolidColorBrush(
+			ColorF(0xbb00aaff),
+			&brushSelected
+		);
+		renderTarget->CreateSolidColorBrush(
+			ColorF(0xbb000000),
+			&brushNotSelected
+		);
+		renderTarget->CreateSolidColorBrush(
+			ColorF(0xffffffff),
+			&brushText
+		);
+
+		return S_OK;
 	}
 
-	void InitPaint() {
-
+	// Release device-dependent resource.
+	void DiscardDeviceResources() {
+		renderTarget = nullptr;
+		brushBg = nullptr;
+		brushNotSelected = nullptr;
+		brushSelected = nullptr;
+		brushText = nullptr;
 	}
 
-	void PaintLayeredWindow()
+	// Resize the render target.
+	void OnResize(
+		UINT width,
+		UINT height
+	) {
+		if (renderTarget)
+		{
+			// Note: This method can fail, but it's okay to ignore the
+			// error here, because the error will be returned again
+			// the next time EndDraw is called.
+			renderTarget->Resize(SizeU(width, height));
+		}
+	}
+
+	void OnRender()
 	{
-		RECT windowRect;
-		GetWindowRect(hwnd, &windowRect);
-		SIZE sizeWindow = { windowRect.right - windowRect.left, windowRect.bottom - windowRect.top };
+		if (!SUCCEEDED(CreateDeviceResources())) {
+			return;
+		}
 
-		HDC hDC = GetDC(hwnd);
-		HDC hdcMemory = CreateCompatibleDC(hDC);
-
-		HBITMAP hMemBitmap = CreateCompatibleBitmap(hDC, sizeWindow.cx, sizeWindow.cy);
-		HGDIOBJ hMemOldBitmap = SelectObject(hdcMemory, hMemBitmap);
-
-		Graphics graphics(hdcMemory);
+		// Clear the window
+		renderTarget->BeginDraw();
+		renderTarget->SetTransform(Matrix3x2F::Identity());
+		renderTarget->Clear(ColorF(0,0,0,0));
 
 		// Background
-		static SolidBrush bgBrush(Color(0xbb000000));
-
-		// Text
-		static SolidBrush whiteBrush(Color(0xffffffff));
-		static FontFamily family(L"Segoe UI");
-		static Font font(&family, 8);
-		static StringFormat textFormat;
-
-		// Tiles
-		static SolidBrush selectedBrush(Color(0xbb00aaff));
-		static SolidBrush normalBrush(Color(0xbb000000));
-
-
-		graphics.FillRectangle(&bgBrush, 0, 0, sizeWindow.cx, sizeWindow.cy);
+		D2D1_SIZE_F rtSize = renderTarget->GetSize();
+		renderTarget->FillRectangle(RectF(0, 0, rtSize.width, rtSize.height), brushBg);
 
 		int i = -1;
 		for (auto &winInfo : this->windowInfos) {
@@ -211,51 +255,106 @@ private:
 			int previewWidth = contentWidth;
 			int previewHeight = contentHeight - iconHeight - iconPaddingBottom;
 			bool isSelected = selected == i;
+
+			// Draw the tile
+			renderTarget->FillRectangle(
+				RectF(selectRectX, selectRectY, selectRectX + selectRectWidth, selectRectY + selectRectHeight), 
+				isSelected ? brushSelected : brushNotSelected);
+
+			// Draw the icon
+			CComPtr<IWICBitmap> bitMap;
+			HICON hIcon = winInfo->GetIcon();
+			dwicFactory->CreateBitmapFromHICON(hIcon, &bitMap);
+			CComPtr<IWICFormatConverter> converter;
+			dwicFactory->CreateFormatConverter(&converter);
+			converter->Initialize(bitMap, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, NULL, 0, WICBitmapPaletteTypeMedianCut);
+			D2D1_BITMAP_PROPERTIES bitmapProps;
+			bitmapProps.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+			bitmapProps.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+			bitmapProps.dpiX = dpiX;
+			bitmapProps.dpiY = dpiY;
+			CComPtr<ID2D1Bitmap> outBitmap;
+			renderTarget->CreateBitmapFromWicBitmap(bitMap, bitmapProps, &outBitmap);
+			renderTarget->DrawBitmap(outBitmap, RectF(iconX, iconY, iconX + iconWidth, iconY + iconHeight));
 			
-			// Tile
-			graphics.FillRectangle(isSelected ? &selectedBrush : &normalBrush, selectRectX, selectRectY, selectRectWidth, selectRectHeight);
-
-			// Text
-			graphics.DrawString(winInfo->GetName().c_str(), -1, &font, RectF(titleX, titleY, titleWidth, titleHeight), &textFormat, &whiteBrush);
-
-			// Icon
-			graphics.DrawImage(Bitmap::FromHICON(winInfo->GetIcon()), Rect(iconX, iconY, iconWidth, iconHeight));
+			// Draw the text
+			CComPtr<IDWriteTextLayout> textLayout;
+			CComPtr<IDWriteTextFormat> textFormat;
+			dwriteFactory->CreateTextFormat(fontFamily,
+				NULL,
+				DWRITE_FONT_WEIGHT_REGULAR,
+				DWRITE_FONT_STYLE_NORMAL,
+				DWRITE_FONT_STRETCH_NORMAL,
+				fontSize,
+				L"en-us",
+				&textFormat
+			);
+			auto name = winInfo->GetName();
+			dwriteFactory->CreateTextLayout(name.c_str(), name.length(), textFormat, titleWidth, titleHeight, &textLayout);
+			renderTarget->DrawTextLayout(Point2F(titleX, titleY), textLayout, (ID2D1Brush*) brushText);
 		}
 
-		// Call UpdateLayeredWindow
-		POINT ptWinPos = { windowRect.left, windowRect.top };
-		BLENDFUNCTION blend = { 0 };
-		blend.BlendOp = AC_SRC_ALPHA;
-		blend.BlendFlags = 0;
-		blend.SourceConstantAlpha = 255;
-		blend.AlphaFormat = AC_SRC_ALPHA;
-		POINT ptSrc = { 0, 0 };
-		if (!UpdateLayeredWindow(hwnd, hDC, &ptWinPos, &sizeWindow, hdcMemory, &ptSrc, 0, &blend, ULW_ALPHA)) {
-			throw runtime_error("Layered window attributes are not correct, ensure WS_EX_LAYERED is set");
-		}
+		HRESULT endHr = renderTarget->EndDraw();
 
-		graphics.ReleaseHDC(hdcMemory);
-		SelectObject(hdcMemory, hMemOldBitmap);
-		DeleteObject(hMemBitmap);
-		DeleteObject(hMemOldBitmap);
-		
-		ReleaseDC(hwnd, hDC);
-		ReleaseDC(hwnd, hdcMemory);
+		if (FAILED(endHr) || endHr == D2DERR_RECREATE_TARGET) {
+			DiscardDeviceResources();
+		}
+	}
+
+	void Redraw() {
+		InvalidateRect(hwnd, NULL, FALSE);
+		UpdateWindow(hwnd);
 	}
 
 	static LRESULT CALLBACK WndProcRouter(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	{
-		// This must be handled here, theWindow->WndProc can't handle this
-		if (message == WM_NCCREATE) {
-			return 1;
+		// Pass the `this` instance to the GWLP_USERDATA
+		if (message == WM_CREATE) {
+			LPCREATESTRUCT pcs = (LPCREATESTRUCT)lParam;
+			SetWindowLongPtr(
+				hWnd,
+				GWLP_USERDATA,
+				(LONG_PTR)pcs->lpCreateParams // this instance
+			);
+			return 0;
 		}
 
-		// TODO: Is it possible to get a wrong hWnd here? This could break horribly in that case.
-		AltTabRoyalWindow* theWindow = (AltTabRoyalWindow*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
-		if (theWindow != nullptr) {
-			return theWindow->WndProc(message, wParam, lParam);
+		AltTabRoyalWindowD2D *theWindow = reinterpret_cast<AltTabRoyalWindowD2D *>(
+			static_cast<LONG_PTR>(
+				GetWindowLongPtr(
+					hWnd,
+					GWLP_USERDATA
+				)));
+		if (!theWindow) {
+			return DefWindowProc(hWnd, message, wParam, lParam);
 		}
 
-		return DefWindowProc(hWnd, message, wParam, lParam);
+		switch (message)
+		{
+			case WM_SIZE:
+				{
+					UINT width = LOWORD(lParam);
+					UINT height = HIWORD(lParam);
+					theWindow->OnResize(width, height);
+				}
+				break;
+			case WM_ERASEBKGND:
+				break;
+			case WM_DISPLAYCHANGE:
+				InvalidateRect(hWnd, NULL, FALSE);
+				break;
+			case WM_PAINT:
+				{
+					theWindow->OnRender();
+					ValidateRect(hWnd, NULL);
+				}
+				break;
+			case WM_DESTROY:
+				//PostQuitMessage(0);
+				break;
+			default:
+				return DefWindowProc(hWnd, message, wParam, lParam);
+		}
+		return 0;
 	}
 };

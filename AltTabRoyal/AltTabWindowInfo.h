@@ -2,8 +2,6 @@
 #include "stdafx.h"
 #include "globals.h"
 using namespace std;
-using namespace Gdiplus;
-#pragma comment (lib,"Gdiplus.lib")
 
 typedef UINT(CALLBACK* ViewGetByLastActivationOrderType)(HWND *windows, UINT count, BOOL onlySwitcherWindows, BOOL onlyCurrentDesktop);
 
@@ -19,12 +17,13 @@ public:
 	~AltTabWindowInfo() {
 		if (hIcon != 0) {
 			DestroyIcon(hIcon);
+			hIcon = 0;
 		}
 		return;
 	}
 
 	HICON GetIcon() {
-		if (hIcon != 0) {
+		if (hIcon != nullptr) {
 			return hIcon;
 		}
 		hIcon = LoadIcon(0, IDI_APPLICATION);
@@ -32,9 +31,14 @@ public:
 	}
 
 	wstring GetName() {
-		WCHAR get_title[512];
-		GetWindowText(this->hwnd, get_title, sizeof(get_title));
-		return get_title;
+		if (name.length() != 0) {
+			return name;
+		}
+		int len = GetWindowTextLength(hwnd) + 1;
+		std::vector<wchar_t> buf(len);
+		GetWindowText(hwnd, &buf[0], len);
+		name = &buf[0];
+		return name;
 	}
 
 	static vector<shared_ptr<AltTabWindowInfo>> GetAll() {
@@ -56,7 +60,7 @@ public:
 		vector<shared_ptr<AltTabWindowInfo>> windowList;
 		for (UINT i = 0; i < count; i++)
 		{
-			windowList.push_back(shared_ptr<AltTabWindowInfo>(new AltTabWindowInfo(wnds[i])));
+			windowList.push_back(make_shared<AltTabWindowInfo>(wnds[i]));
 		}
 		return windowList;
 	}
@@ -65,6 +69,7 @@ public:
 		FreeLibrary(hVirtualDesktopAccessor);
 	}
 private:
-	HWND hwnd;
-	HICON hIcon;
+	HWND hwnd = 0;
+	HICON hIcon = nullptr;
+	wstring name = L"";
 };

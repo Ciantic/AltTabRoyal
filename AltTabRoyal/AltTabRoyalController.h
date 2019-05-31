@@ -5,10 +5,9 @@
 #include "AltTabRoyalWindow.h"
 #include "AltTabWindowInfo.h"
 using namespace std;
-using namespace Gdiplus;
-#pragma comment (lib,"Gdiplus.lib")
 
-#define WM_SHOW_ALTTABBER WM_USER + 1
+#define WM_USER_SHOW WM_USER + 1
+#define WM_USER_HIDE WM_USER + 2
 
 class AltTabRoyalController {
 public:
@@ -55,28 +54,6 @@ public:
 		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)this);
 		ShowWindow(hwnd, SW_SHOW);
 		UpdateWindow(hwnd);
-		this->Show();
-		
-		//this->Select(2);
-		//this->Select(3);
-		//this->Select(4);
-		//this->Select(5);
-		//this->Select(6);
-		//this->Select(7);
-		//this->Select(8);
-		//this->Select(9);
-		for (int i = 0; i < 100; i++)
-		{
-			this->Select(i);
-		}
-		/*this->Hide();
-		this->Show();
-		this->Hide();
-		this->Show();
-		this->Hide();
-		this->Show();
-		this->Hide();
-		this->Show();*/
 	}
 
 	HWND GetHandle() {
@@ -88,12 +65,19 @@ public:
 			return;
 		}
 		tabWindowInfos = AltTabWindowInfo::GetAll();
-		windows.push_back(shared_ptr<AltTabRoyalWindow>(new AltTabRoyalWindow(tabWindowInfos, 1000, 600)));
+		windows.push_back(make_shared<AltTabRoyalWindowD2D>(tabWindowInfos, 1000, 600));
+		windows.push_back(make_shared<AltTabRoyalWindowD2D>(tabWindowInfos, -1000, 600));
 	}
 
 	void Hide() {
 		windows.clear();
 		tabWindowInfos.clear();
+
+		// Release some memory
+		DWORD pid = GetCurrentProcessId();
+		HANDLE ph = OpenProcess(PROCESS_SET_QUOTA, 0, pid);
+		SetProcessWorkingSetSize(ph, -1, -1);
+		CloseHandle(ph);
 	}
 
 	void Select(int n) {
@@ -102,7 +86,7 @@ public:
 		}
 	}
 private:
-	vector<shared_ptr<AltTabRoyalWindow>> windows;
+	vector<shared_ptr<AltTabRoyalWindowD2D>> windows;
 	vector<shared_ptr<AltTabWindowInfo>> tabWindowInfos;
 	HWND hwnd;
 	int selected;
@@ -111,9 +95,14 @@ private:
 
 		switch (message)
 		{
-		case WM_SHOW_ALTTABBER:
+		case WM_USER_SHOW:
 		{
 			this->Show();
+			break;
+		}
+		case WM_USER_HIDE:
+		{
+			this->Hide();
 			break;
 		}
 		case WM_DESTROY:
