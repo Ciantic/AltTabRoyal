@@ -4,10 +4,48 @@
 #include "resource.h"
 #include "AltTabRoyalWindow.h"
 #include "AltTabWindowInfo.h"
+
 using namespace std;
 
-#define WM_USER_SHOW WM_USER + 1
-#define WM_USER_HIDE WM_USER + 2
+struct ThreadForAltTabWindowArgs {
+	HWND hwnd = 0;
+	DWORD threadId = 0;
+	HANDLE threadSignal = 0;
+	HWND parentHwnd = 0;
+	vector<shared_ptr<AltTabWindowInfo>>* tabWindowInfos;
+	int midX = 0;
+	int midY = 0;
+	int selected = 0;
+	ThreadForAltTabWindowArgs() {
+
+	}
+	ThreadForAltTabWindowArgs(vector<shared_ptr<AltTabWindowInfo>>* tabWindowInfos, int midX, int midY) {
+		this->tabWindowInfos = tabWindowInfos;
+		this->midX = midX;
+		this->midY = midY;
+	}
+	~ThreadForAltTabWindowArgs() {
+		if (threadSignal != 0) {
+			/*
+			https://docs.microsoft.com/en-us/windows/desktop/api/winuser/nf-winuser-postthreadmessagea
+			MSDN
+			The thread to which the message is posted must have created a message queue, or else the call to PostThreadMessage fails. Use the following method to handle this situation.
+
+			1. Create an event object, then create the thread.
+			2. Use the WaitForSingleObject function to wait for the event to be set to the signaled state before calling PostThreadMessage.
+			3. In the thread to which the message will be posted, call PeekMessage as shown here to force the system to create the message queue. `PeekMessage(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE)`
+			4. Set the event, to indicate that the thread is ready to receive posted messages.
+			*/
+			WaitForSingleObject(threadSignal, INFINITE);
+			CloseHandle(threadSignal);
+			if (!PostThreadMessage(threadId, WM_APP_QUIT, 0, 0)) {
+				DWORD err = GetLastError();
+				throw runtime_error("This used to work damit: " + to_string(err));
+			}
+			
+		}
+	}
+};
 
 class AltTabRoyalController {
 public:
@@ -44,7 +82,7 @@ public:
 			nullptr, // parent
 			nullptr, // menu
 			hInst,
-			nullptr);
+			this);
 
 		if (hwnd == nullptr)
 		{
@@ -61,16 +99,26 @@ public:
 	}
 
 	void Show() {
-		if (windows.size() != 0) {
+		if (altTabWindowThreads.size() != 0) {
 			return;
 		}
 		tabWindowInfos = AltTabWindowInfo::GetAll();
-		windows.push_back(make_shared<AltTabRoyalWindowD2D>(tabWindowInfos, 1000, 600));
-		windows.push_back(make_shared<AltTabRoyalWindowD2D>(tabWindowInfos, -1000, 600));
+
+		// Create windows at the center of each monitor
+		auto fn = [this](HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor) -> BOOL {
+			int midX = lprcMonitor->left + abs(lprcMonitor->right - lprcMonitor->left) / 2;
+			int midY = lprcMonitor->top + abs(lprcMonitor->bottom - lprcMonitor->top) / 2;
+			this->CreateAltTabRoyalWindow(midX, midY);
+			return true;
+		};
+		auto thunk = [](HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM lParam) -> BOOL {
+			return (*reinterpret_cast<decltype(fn)*>(lParam))(hMonitor, hdcMonitor, lprcMonitor);
+		};
+		EnumDisplayMonitors(NULL, nullptr, thunk, (LPARAM) &fn);
 	}
 
 	void Hide() {
-		windows.clear();
+		altTabWindowThreads.clear();
 		tabWindowInfos.clear();
 
 		// Release some memory
@@ -81,52 +129,121 @@ public:
 	}
 
 	void Select(int n) {
-		for (auto &win : windows) {
-			win->Select(n);
+		int size = tabWindowInfos.size();
+		if (size != 0) {
+			selected = n % size;
 		}
+		else {
+			selected = 0;
+		}
+		SyncAll();
+
 	}
+
 private:
-	vector<shared_ptr<AltTabRoyalWindowD2D>> windows;
+	map<DWORD, ThreadForAltTabWindowArgs> altTabWindowThreads;
 	vector<shared_ptr<AltTabWindowInfo>> tabWindowInfos;
 	HWND hwnd;
 	int selected;
 
-	LRESULT CALLBACK WndProc(UINT message, WPARAM wParam, LPARAM lParam) {
+	static DWORD WINAPI ThreadForAltTabWindow(ThreadForAltTabWindowArgs* args) {
+		MSG msg;
+		PeekMessage(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);
+		SetEvent(args->threadSignal);
 
-		switch (message)
+		AltTabRoyalWindow royalWindow(args->parentHwnd, *args->tabWindowInfos, args->midX, args->midY);
+
+		// Main message loop:
+		while (GetMessage(&msg, nullptr, 0, 0))
 		{
-		case WM_USER_SHOW:
-		{
-			this->Show();
-			break;
+			TranslateMessage(&msg);
+			if (msg.message == WM_APP_QUIT) {
+				PostQuitMessage(0);
+			}
+			DispatchMessage(&msg);
 		}
-		case WM_USER_HIDE:
-		{
-			this->Hide();
-			break;
+		return (int)msg.wParam;
+	}
+
+	void Sync(DWORD threadId) {
+		if (altTabWindowThreads.count(threadId)) {
+			PostMessage(altTabWindowThreads[threadId].hwnd, WM_USER_SELECT, selected, 0);
 		}
-		case WM_DESTROY:
-			PostQuitMessage(0);
-			break;
-		default:
-			return DefWindowProc(hwnd, message, wParam, lParam);
+	}
+
+	void SyncAll() {
+		for (auto &th : altTabWindowThreads) {
+			Sync(th.first);
 		}
-		return 0;
+	}
+
+	void CreateAltTabRoyalWindow(int midX, int midY) {
+		auto args = new ThreadForAltTabWindowArgs(&tabWindowInfos, midX, midY);
+		DWORD threadId;
+		HANDLE thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ThreadForAltTabWindow, (LPVOID) args, CREATE_SUSPENDED, &threadId);
+		args->parentHwnd = hwnd;
+		args->threadId = threadId;
+		args->threadSignal = CreateEvent(NULL, FALSE, FALSE, NULL);
+		altTabWindowThreads[threadId] = *args;
+		ResumeThread(thread);
+		CloseHandle(thread);
+	}
+
+	void AddAltTabRoyalWindow(DWORD threadId, HWND hwnd) {
+		if (altTabWindowThreads.count(threadId)) {
+			altTabWindowThreads[threadId].hwnd = hwnd;
+		}
+		Sync(threadId);
+	}
+
+	void RemoveAltTabRoyalWindow(DWORD threadId) {
+		if (altTabWindowThreads.count(threadId)) {
+			altTabWindowThreads[threadId].hwnd = 0;
+		}
 	}
 
 	static LRESULT CALLBACK WndProcRouter(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	{
 		// This must be handled here, theWindow->WndProc can't handle this
-		if (message == WM_NCCREATE) {
-			return 1;
+		// Pass the `this` instance to the GWLP_USERDATA
+		if (message == WM_CREATE) {
+			LPCREATESTRUCT pcs = (LPCREATESTRUCT)lParam;
+			SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)pcs->lpCreateParams);
+			return 0;
 		}
 
-		// TODO: Is it possible to get a wrong hWnd here? This could break horribly in that case.
-		AltTabRoyalController* theWindow = (AltTabRoyalController*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
-		if (theWindow != nullptr) {
-			return theWindow->WndProc(message, wParam, lParam);
-		}
+		AltTabRoyalController *theWindow = reinterpret_cast<AltTabRoyalController *>(
+			GetWindowLongPtr(hWnd,GWLP_USERDATA)
+		);
 
-		return DefWindowProc(hWnd, message, wParam, lParam);
+		if (!theWindow) {
+			return DefWindowProc(hWnd, message, wParam, lParam);
+		}
+		
+		switch (message)
+		{
+			case WM_USER_SHOW:
+				theWindow->Show();
+				break;
+			case WM_USER_HIDE:
+				theWindow->Hide();
+				break;
+			case WM_USER_ROYAL_WINDOW_CREATED:
+				theWindow->AddAltTabRoyalWindow(lParam, (HWND) wParam);
+				break;
+			case WM_USER_ROYAL_WINDOW_DELETED:
+				theWindow->RemoveAltTabRoyalWindow(lParam);
+				break;
+			case WM_USER_SELECT:
+				theWindow->Select(wParam);
+				break;
+			case WM_DESTROY:
+				PostQuitMessage(0);
+				break;
+			default:
+				return DefWindowProc(hWnd, message, wParam, lParam);
+		}
+		return 0;
+
 	}
 };

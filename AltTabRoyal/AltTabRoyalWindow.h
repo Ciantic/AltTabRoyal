@@ -13,11 +13,12 @@ using namespace D2D1;
 // Follows the guide here: https://docs.microsoft.com/en-us/windows/desktop/direct2d/direct2d-quickstart
 
 
-class AltTabRoyalWindowD2D {
+class AltTabRoyalWindow {
 public:
 	static constexpr const auto CLASSNAME = L"ALT_TAB_ROYAL_WINDOW_CLASS";
-	AltTabRoyalWindowD2D(vector<shared_ptr<AltTabWindowInfo>> windowInfos, int midX, int midY)
+	AltTabRoyalWindow(HWND parentHwnd, vector<shared_ptr<AltTabWindowInfo>> windowInfos, int midX, int midY)
 	{
+		this->parentHwnd = parentHwnd;
 		this->windowInfos = windowInfos;
 
 		// Initialize device-indpendent resources, such
@@ -34,8 +35,10 @@ public:
 		dpiX = dpiXv / 96.0;
 		dpiY = dpiXv / 96.0;
 
-		// Scale the draw parameters
+		midX /= dpiX;
+		midY /= dpiY;
 
+		// Scale the draw parameters
 		this->gridRows = (int)ceil((double)windowInfos.size() / (double)this->gridCols);
 		int windowWidth = (this->windowPadding * 2 + this->gridWidth * this->gridCols);
 		int windowHeight = (this->windowPadding * 2 + this->gridHeight * this->gridRows);
@@ -60,7 +63,11 @@ public:
 
 		// Create window
 		hwnd = CreateWindowExW(
+#ifdef _DEBUG
+			WS_EX_COMPOSITED,
+#else
 			WS_EX_COMPOSITED | WS_EX_TOPMOST,
+#endif
 			CLASSNAME,
 			L"Gui",
 			WS_POPUP, // Style
@@ -68,7 +75,7 @@ public:
 			windowY * dpiY, // y
 			windowWidth * dpiX, // w
 			windowHeight * dpiY, // h
-			nullptr, // parent
+			parentHwnd, // parent
 			nullptr, // menu
 			hInst,
 			this);
@@ -83,13 +90,15 @@ public:
 		if (!SUCCEEDED(DwmExtendFrameIntoClientArea(hwnd, &m))) {
 			throw runtime_error("Unable to extend");
 		}
-
+		PostMessage(parentHwnd, WM_USER_ROYAL_WINDOW_CREATED, (WPARAM) hwnd, GetCurrentThreadId());
 		ShowWindow(hwnd, SW_SHOW);
 		UpdateWindow(hwnd);
 	}
 
-	~AltTabRoyalWindowD2D() {
-		DestroyWindow(hwnd);
+	~AltTabRoyalWindow() {
+		if (hwnd) {
+			DestroyWindow(hwnd);
+		}
 		DiscardDeviceResources();
 	}
 
@@ -98,11 +107,18 @@ public:
 	}
 
 	void Select(int n) {
-		selected = n % this->windowInfos.size();
+		int size = this->windowInfos.size();
+		if (size != 0) {
+			selected = n % size;
+		}
+		else {
+			selected = 0;
+		}
 		Redraw();
 	}
 
 private:
+	HWND parentHwnd = 0;
 	HWND hwnd = 0;
 	CComPtr<IWICImagingFactory> dwicFactory = nullptr;
 	CComPtr<IDWriteFactory> dwriteFactory = nullptr;
@@ -265,17 +281,21 @@ private:
 			CComPtr<IWICBitmap> bitMap;
 			HICON hIcon = winInfo->GetIcon();
 			dwicFactory->CreateBitmapFromHICON(hIcon, &bitMap);
-			CComPtr<IWICFormatConverter> converter;
-			dwicFactory->CreateFormatConverter(&converter);
-			converter->Initialize(bitMap, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, NULL, 0, WICBitmapPaletteTypeMedianCut);
-			D2D1_BITMAP_PROPERTIES bitmapProps;
-			bitmapProps.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-			bitmapProps.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
-			bitmapProps.dpiX = dpiX;
-			bitmapProps.dpiY = dpiY;
-			CComPtr<ID2D1Bitmap> outBitmap;
-			renderTarget->CreateBitmapFromWicBitmap(bitMap, bitmapProps, &outBitmap);
-			renderTarget->DrawBitmap(outBitmap, RectF(iconX, iconY, iconX + iconWidth, iconY + iconHeight));
+			if (bitMap != nullptr) {
+				CComPtr<IWICFormatConverter> converter;
+				dwicFactory->CreateFormatConverter(&converter);
+				converter->Initialize(bitMap, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, NULL, 0, WICBitmapPaletteTypeMedianCut);
+				D2D1_BITMAP_PROPERTIES bitmapProps;
+				bitmapProps.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+				bitmapProps.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+				bitmapProps.dpiX = dpiX;
+				bitmapProps.dpiY = dpiY;
+				CComPtr<ID2D1Bitmap> outBitmap;
+				renderTarget->CreateBitmapFromWicBitmap(bitMap, bitmapProps, &outBitmap);
+				if (outBitmap != nullptr) {
+					renderTarget->DrawBitmap(outBitmap, RectF(iconX, iconY, iconX + iconWidth, iconY + iconHeight));
+				}
+			}
 			
 			// Draw the text
 			CComPtr<IDWriteTextLayout> textLayout;
@@ -319,18 +339,18 @@ private:
 			return 0;
 		}
 
-		AltTabRoyalWindowD2D *theWindow = reinterpret_cast<AltTabRoyalWindowD2D *>(
-			static_cast<LONG_PTR>(
-				GetWindowLongPtr(
-					hWnd,
-					GWLP_USERDATA
-				)));
+		AltTabRoyalWindow *theWindow = reinterpret_cast<AltTabRoyalWindow *>(
+			GetWindowLongPtr(hWnd, GWLP_USERDATA)
+		);
 		if (!theWindow) {
 			return DefWindowProc(hWnd, message, wParam, lParam);
 		}
 
 		switch (message)
 		{
+			case WM_USER_SELECT:
+				theWindow->Select(wParam);
+				break;
 			case WM_SIZE:
 				{
 					UINT width = LOWORD(lParam);
@@ -344,13 +364,12 @@ private:
 				InvalidateRect(hWnd, NULL, FALSE);
 				break;
 			case WM_PAINT:
-				{
-					theWindow->OnRender();
-					ValidateRect(hWnd, NULL);
-				}
+				theWindow->OnRender();
+				ValidateRect(hWnd, NULL);
 				break;
 			case WM_DESTROY:
-				//PostQuitMessage(0);
+				PostMessage(theWindow->parentHwnd, WM_USER_ROYAL_WINDOW_DELETED, (WPARAM) hWnd, GetCurrentThreadId());
+				PostQuitMessage(0);
 				break;
 			default:
 				return DefWindowProc(hWnd, message, wParam, lParam);
