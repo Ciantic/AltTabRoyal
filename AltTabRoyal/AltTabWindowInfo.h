@@ -4,9 +4,11 @@
 using namespace std;
 
 typedef UINT(CALLBACK* ViewGetByLastActivationOrderType)(HWND *windows, UINT count, BOOL onlySwitcherWindows, BOOL onlyCurrentDesktop);
+typedef HRESULT(CALLBACK* ViewSwitchToType)(HWND hwnd);
 
 HMODULE hVirtualDesktopAccessor;
 ViewGetByLastActivationOrderType ViewGetByLastActivationOrder;
+ViewSwitchToType ViewSwitchTo;
 
 class AltTabWindowInfo {
 public:
@@ -20,6 +22,10 @@ public:
 			hIcon = 0;
 		}
 		return;
+	}
+
+	HWND GetHandle() {
+		return hwnd;
 	}
 
 	HICON GetIcon() {
@@ -39,6 +45,22 @@ public:
 		GetWindowText(hwnd, &buf[0], len);
 		name = &buf[0];
 		return name;
+	}
+
+	void SwitchTo() {
+		if (hVirtualDesktopAccessor == nullptr) {
+			hVirtualDesktopAccessor = LoadLibrary(L"C:\\Source\\CandCPP\\VirtualDesktopAccessor\\x64\\Debug\\VirtualDesktopAccessor.dll");
+		}
+		if (hVirtualDesktopAccessor == nullptr) {
+			return;
+		}
+		if (ViewSwitchTo == nullptr) {
+			ViewSwitchTo = (ViewSwitchToType)GetProcAddress(hVirtualDesktopAccessor, "ViewSwitchTo");
+		}
+		if (ViewSwitchTo == nullptr) {
+			return;
+		}
+		ViewSwitchTo(hwnd);
 	}
 
 	static vector<shared_ptr<AltTabWindowInfo>> GetAll() {

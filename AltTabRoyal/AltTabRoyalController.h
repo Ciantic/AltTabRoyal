@@ -90,7 +90,7 @@ public:
 		}
 
 		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)this);
-		ShowWindow(hwnd, SW_SHOW);
+		ShowWindow(hwnd, SW_HIDE);
 		UpdateWindow(hwnd);
 	}
 
@@ -120,6 +120,7 @@ public:
 	void Hide() {
 		altTabWindowThreads.clear();
 		tabWindowInfos.clear();
+		selected = 0;
 
 		// Release some memory
 		DWORD pid = GetCurrentProcessId();
@@ -130,6 +131,9 @@ public:
 
 	void Select(int n) {
 		int size = tabWindowInfos.size();
+		if (n < 0) {
+			n = abs(size + n);
+		}
 		if (size != 0) {
 			selected = n % size;
 		}
@@ -137,7 +141,12 @@ public:
 			selected = 0;
 		}
 		SyncAll();
+	}
 
+	void SwitchTo() {
+		if (selected < tabWindowInfos.size()) {
+			tabWindowInfos[selected]->SwitchTo();
+		}
 	}
 
 private:
@@ -222,21 +231,35 @@ private:
 		
 		switch (message)
 		{
+			// Interface for other applications
 			case WM_USER_SHOW:
 				theWindow->Show();
 				break;
 			case WM_USER_HIDE:
 				theWindow->Hide();
 				break;
-			case WM_USER_ROYAL_WINDOW_CREATED:
-				theWindow->AddAltTabRoyalWindow(lParam, (HWND) wParam);
-				break;
-			case WM_USER_ROYAL_WINDOW_DELETED:
-				theWindow->RemoveAltTabRoyalWindow(lParam);
-				break;
 			case WM_USER_SELECT:
 				theWindow->Select(wParam);
 				break;
+			case WM_USER_NEXT:
+				theWindow->Select(theWindow->selected + 1);
+				break;
+			case WM_USER_PREVIOUS:
+				theWindow->Select(theWindow->selected - 1);
+				break;
+			case WM_USER_SWITCHTO:
+				theWindow->SwitchTo();
+				break;
+
+			// Thread messaging
+			case WM_APP_ROYAL_WINDOW_CREATED:
+				theWindow->AddAltTabRoyalWindow(lParam, (HWND)wParam);
+				break;
+			case WM_APP_ROYAL_WINDOW_DELETED:
+				theWindow->RemoveAltTabRoyalWindow(lParam);
+				break;
+
+			// Regular messages
 			case WM_DESTROY:
 				PostQuitMessage(0);
 				break;

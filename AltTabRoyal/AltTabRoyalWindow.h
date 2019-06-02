@@ -2,6 +2,7 @@
 #include "stdafx.h"
 #include "globals.h"
 #include "AltTabWindowInfo.h"
+#include "PeekPreview.h"
 using namespace std;
 using namespace D2D1;
 
@@ -10,9 +11,22 @@ using namespace D2D1;
 #pragma comment (lib, "dwrite")
 #pragma comment (lib, "dwmapi")
 
+RECT _ContainImageWithin(int width, int height, int imageWidth, int imageHeight) {
+	double ar = width / (double) height;
+	double imageAr = imageWidth / (double) imageHeight;
+	RECT result = { 0 };
+	result.right = width;
+	result.bottom = height;
+	if (ar > imageAr) {
+		result.right = height * imageAr;
+	}
+	else if (ar < imageAr) {
+		result.bottom = width / imageAr;
+	}
+	return result;
+}
+
 // Follows the guide here: https://docs.microsoft.com/en-us/windows/desktop/direct2d/direct2d-quickstart
-
-
 class AltTabRoyalWindow {
 public:
 	static constexpr const auto CLASSNAME = L"ALT_TAB_ROYAL_WINDOW_CLASS";
@@ -90,7 +104,10 @@ public:
 		if (!SUCCEEDED(DwmExtendFrameIntoClientArea(hwnd, &m))) {
 			throw runtime_error("Unable to extend");
 		}
-		PostMessage(parentHwnd, WM_USER_ROYAL_WINDOW_CREATED, (WPARAM) hwnd, GetCurrentThreadId());
+
+		// Inform the controller that HWND is created
+		PostMessage(parentHwnd, WM_APP_ROYAL_WINDOW_CREATED, (WPARAM) hwnd, GetCurrentThreadId());
+
 		ShowWindow(hwnd, SW_SHOW);
 		UpdateWindow(hwnd);
 	}
@@ -108,6 +125,9 @@ public:
 
 	void Select(int n) {
 		int size = this->windowInfos.size();
+		if (n < 0) {
+			n = abs(size + n);
+		}
 		if (size != 0) {
 			selected = n % size;
 		}
@@ -125,6 +145,7 @@ private:
 	CComPtr<ID2D1Factory> d2dFactory = nullptr;
 	CComPtr<ID2D1HwndRenderTarget> renderTarget = nullptr;
 	CComPtr<ID2D1SolidColorBrush> brushBg = nullptr;
+	CComPtr<ID2D1SolidColorBrush> brushPreviewBg = nullptr;
 	CComPtr<ID2D1SolidColorBrush> brushSelected = nullptr;
 	CComPtr<ID2D1SolidColorBrush> brushNotSelected = nullptr;
 	CComPtr<ID2D1SolidColorBrush> brushText = nullptr;
@@ -150,8 +171,7 @@ private:
 	double dpiY = 1.0;
 
 	// Peek previews
-	// vector<shared_ptr<PeekPreview>> peekPreviews;
-
+	vector<shared_ptr<PeekPreview>> peekPreviews;
 
 	HRESULT CreateDeviceIndependentResources() {
 		CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, __uuidof(IWICImagingFactory), reinterpret_cast<LPVOID*>(&dwicFactory));
@@ -184,7 +204,7 @@ private:
 		}
 
 		renderTarget->CreateSolidColorBrush(
-			ColorF(0,0,0,0.85F),
+			ColorF(0.2F, 0.2F, 0.2F, 0.85F),
 			&brushBg
 		);
 		renderTarget->CreateSolidColorBrush(
@@ -199,6 +219,11 @@ private:
 			ColorF(0xffffffff),
 			&brushText
 		);
+		renderTarget->CreateSolidColorBrush(
+			ColorF(0x00000000),
+			&brushPreviewBg
+		);
+
 
 		return S_OK;
 	}
@@ -231,6 +256,8 @@ private:
 		if (!SUCCEEDED(CreateDeviceResources())) {
 			return;
 		}
+
+		bool createPeekPreviews = peekPreviews.size() == 0;
 
 		// Clear the window
 		renderTarget->BeginDraw();
@@ -312,6 +339,36 @@ private:
 			auto name = winInfo->GetName();
 			dwriteFactory->CreateTextLayout(name.c_str(), name.length(), textFormat, titleWidth, titleHeight, &textLayout);
 			renderTarget->DrawTextLayout(Point2F(titleX, titleY), textLayout, (ID2D1Brush*) brushText);
+
+			// Peek preview background
+			renderTarget->FillRectangle(
+				RectF(previewX, previewY, previewX + previewWidth, previewY + previewHeight),
+				brushPreviewBg);
+
+			// Create peek previews
+			if (createPeekPreviews) {
+				auto peekPreview = make_shared<PeekPreview>(hwnd, winInfo->GetHandle());
+				peekPreviews.push_back(peekPreview);
+				if (peekPreview->Register() == S_OK) {
+					SIZE size = { 0 };
+					DWM_THUMBNAIL_PROPERTIES props = { 0 };
+					if (peekPreview->GetSize(&size) == S_OK) {
+						auto newSize = _ContainImageWithin(previewWidth, previewHeight, size.cx, size.cy);
+						props.rcSource.top = 0;
+						props.rcSource.left = 0;
+						props.rcSource.right = size.cx;
+						props.rcSource.bottom = size.cy;
+						props.rcDestination.top = (previewY + newSize.top) * dpiX;
+						props.rcDestination.left = (previewX + newSize.left) * dpiY;
+						props.rcDestination.right = (previewX + newSize.right) * dpiX;
+						props.rcDestination.bottom = (previewY + newSize.bottom) * dpiY;
+						props.opacity = 255;
+						props.fVisible = true;
+						props.dwFlags = DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_RECTDESTINATION | DWM_TNP_RECTSOURCE;
+						peekPreview->SetProperties(&props);
+					}
+				}
+			}
 		}
 
 		HRESULT endHr = renderTarget->EndDraw();
@@ -368,7 +425,7 @@ private:
 				ValidateRect(hWnd, NULL);
 				break;
 			case WM_DESTROY:
-				PostMessage(theWindow->parentHwnd, WM_USER_ROYAL_WINDOW_DELETED, (WPARAM) hWnd, GetCurrentThreadId());
+				PostMessage(theWindow->parentHwnd, WM_APP_ROYAL_WINDOW_DELETED, (WPARAM) hWnd, GetCurrentThreadId());
 				PostQuitMessage(0);
 				break;
 			default:
