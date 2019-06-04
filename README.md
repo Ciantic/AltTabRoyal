@@ -8,6 +8,12 @@ Currently the requirement is to have Virtual Desktop Accessories DLL in the loca
 
 License MIT, Copyright 2019 Jari Pennanen, see LICENSE.txt for copying.
 
+## Todo
+
+- Remove raw pointers
+- Remove assignment and copy constructors
+- Get grips with moving constuctor
+
 
 ## Proof of concept AHK
 

@@ -9,6 +9,10 @@ public:
 		this->hwndDest = hwndDest;
 		this->hwndSource = hwndSource;
 	}
+
+	PeekPreview(const PeekPreview&) = delete;
+	PeekPreview& operator=(const PeekPreview&) = delete;
+
 	HRESULT Register() {
 		return DwmRegisterThumbnail(hwndDest, hwndSource, &thumb);
 	}

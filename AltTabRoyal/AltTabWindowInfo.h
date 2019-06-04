@@ -24,6 +24,10 @@ public:
 		return;
 	}
 
+	AltTabWindowInfo (const AltTabWindowInfo&) = delete;
+	AltTabWindowInfo& operator=(const AltTabWindowInfo&) = delete;
+
+
 	HWND GetHandle() {
 		return hwnd;
 	}

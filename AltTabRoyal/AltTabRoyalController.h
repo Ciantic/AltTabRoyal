@@ -24,6 +24,7 @@ struct ThreadForAltTabWindowArgs {
 		this->midX = midX;
 		this->midY = midY;
 	}
+
 	~ThreadForAltTabWindowArgs() {
 		if (threadSignal != 0) {
 			/*

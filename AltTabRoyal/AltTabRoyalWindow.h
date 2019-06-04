@@ -119,6 +119,9 @@ public:
 		DiscardDeviceResources();
 	}
 
+	AltTabRoyalWindow(const AltTabRoyalWindow&) = delete;
+	AltTabRoyalWindow& operator=(const AltTabRoyalWindow&) = delete;
+
 	HWND GetHandle() {
 		return hwnd;
 	}
